@@ -30,7 +30,7 @@ cmd_push() {
   [ -f "$src" ] || die "no existe el archivo: $src"
   echo " $BRANDS " | grep -q " $brand " || die "marca no válida: '$brand'. Válidas: $BRANDS"
 
-  local work; work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+  WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT; local work="$WORK"
   local fmt w h bytes long ext out
   fmt="$(sips -g format "$src" | awk '/format:/{print $2}')"
   w="$(sips -g pixelWidth "$src" | awk '/pixelWidth:/{print $2}')"

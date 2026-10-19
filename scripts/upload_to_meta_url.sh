@@ -23,7 +23,62 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
 git remote get-url origin | grep -q "$OWNER_REPO" || die "este clon no apunta a $OWNER_REPO"
 
-rand() { uuidgen | tr 'A-Z' 'a-z'; }
+rand() {
+  if command -v uuidgen >/dev/null 2>&1; then uuidgen | tr 'A-Z' 'a-z'
+  else python3 -c 'import uuid; print(uuid.uuid4())'; fi
+}
+
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else sha256sum "$1" | awk '{print $1}'; fi
+}
+
+# Herramienta de imagen: sips (macOS) o Pillow (Linux). Misma salida en ambas.
+if command -v sips >/dev/null 2>&1; then IMG_TOOL="sips"
+elif python3 -c 'import PIL' >/dev/null 2>&1; then IMG_TOOL="pillow"
+else IMG_TOOL=""; fi
+
+# img_probe <archivo>  ->  "formato ancho alto"  (formato: jpeg|png|otro)
+img_probe() {
+  case "$IMG_TOOL" in
+    sips)
+      printf '%s %s %s\n' \
+        "$(sips -g format "$1" | awk '/format:/{print $2}')" \
+        "$(sips -g pixelWidth "$1" | awk '/pixelWidth:/{print $2}')" \
+        "$(sips -g pixelHeight "$1" | awk '/pixelHeight:/{print $2}')" ;;
+    pillow)
+      python3 -I - "$1" <<'PY'
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1])
+print((im.format or "otro").lower(), im.size[0], im.size[1])
+PY
+      ;;
+    *) die "falta una herramienta de imagen: instalar Pillow (pip install pillow) o usar macOS (sips)" ;;
+  esac
+}
+
+# img_to_jpeg <origen> <destino> <calidad> [lado_maximo]
+img_to_jpeg() {
+  local src="$1" out="$2" q="$3" side="${4:-}"
+  case "$IMG_TOOL" in
+    sips)
+      if [ -n "$side" ]; then sips -s format jpeg -s formatOptions "$q" -Z "$side" "$src" --out "$out" >/dev/null
+      else sips -s format jpeg -s formatOptions "$q" "$src" --out "$out" >/dev/null; fi ;;
+    pillow)
+      python3 -I - "$src" "$out" "$q" "$side" <<'PY'
+import sys
+from PIL import Image
+src, out, q, side = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+im = Image.open(src).convert("RGB")
+if side:
+    im.thumbnail((int(side), int(side)), Image.LANCZOS)
+im.save(out, "JPEG", quality=q, optimize=True)
+PY
+      ;;
+    *) die "falta una herramienta de imagen: instalar Pillow (pip install pillow) o usar macOS (sips)" ;;
+  esac
+}
 
 cmd_push() {
   local src="${1:-}" brand="${2:-}"
@@ -32,9 +87,7 @@ cmd_push() {
 
   WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT; local work="$WORK"
   local fmt w h bytes long ext out
-  fmt="$(sips -g format "$src" | awk '/format:/{print $2}')"
-  w="$(sips -g pixelWidth "$src" | awk '/pixelWidth:/{print $2}')"
-  h="$(sips -g pixelHeight "$src" | awk '/pixelHeight:/{print $2}')"
+  read -r fmt w h < <(img_probe "$src")
   bytes="$(wc -c < "$src" | tr -d ' ')"
   long=$(( w > h ? w : h ))
   case "$fmt" in jpeg|png) ;; *) FORCE_JPEG=1 ;; esac
@@ -43,9 +96,9 @@ cmd_push() {
   if [ "$FORCE_JPEG" = "1" ] || [ "$long" -gt "$MAX_SIDE" ] || [ "$bytes" -gt "$MAX_BYTES" ]; then
     ext="jpg"; out="$work/art.jpg"
     if [ "$long" -gt "$MAX_SIDE" ]; then
-      sips -s format jpeg -s formatOptions "$JPEG_QUALITY" -Z "$MAX_SIDE" "$src" --out "$out" >/dev/null
+      img_to_jpeg "$src" "$out" "$JPEG_QUALITY" "$MAX_SIDE"
     else
-      sips -s format jpeg -s formatOptions "$JPEG_QUALITY" "$src" --out "$out" >/dev/null
+      img_to_jpeg "$src" "$out" "$JPEG_QUALITY"
     fi
     echo "conversion=jpeg q$JPEG_QUALITY (origen ${fmt} ${w}x${h}, ${bytes} bytes)"
   else
@@ -72,8 +125,9 @@ cmd_push() {
     [ "$code" = "200" ] && break; sleep 3
   done
 
-  echo "salida=$(sips -g pixelWidth -g pixelHeight "$out" | awk '/pixel/{printf "%s ", $2}')px, $(wc -c < "$out" | tr -d ' ') bytes"
-  echo "sha256=$(shasum -a 256 "$out" | awk '{print $1}')"
+  local ofmt ow oh; read -r ofmt ow oh < <(img_probe "$out")
+  echo "salida=${ow} ${oh} px, $(wc -c < "$out" | tr -d ' ') bytes"
+  echo "sha256=$(sha256_of "$out")"
   echo "branch=$branch"
   echo "path=$path"
   echo "http=$code"

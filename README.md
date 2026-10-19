@@ -10,6 +10,8 @@ Repositorio **de tránsito** para subir artes publicitarios de VICASA a Meta Ads
 
 ## Uso
 
+Requisitos: macOS (`sips`) o Linux con Python 3 y Pillow (`pip install pillow`). El script elige solo.
+
 ```bash
 scripts/upload_to_meta_url.sh push <ruta-del-arte> <marca>   # sube e imprime la URL raw
 scripts/upload_to_meta_url.sh cleanup <rama>                 # borra la rama tras cargar a Meta
